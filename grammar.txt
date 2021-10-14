@@ -1,0 +1,8 @@
+string  ->  <строка>
+name    ->  <имя>
+group   ->  "(" name? case ")"
+repeat  ->  (group | string | имя) <повторы>?
+cl_op   ->  repeat ("..." | "?")?
+concat  ->  cl_op | (cl_op concat)
+case    ->  concat | (case '|' case)
+root    ->  case
