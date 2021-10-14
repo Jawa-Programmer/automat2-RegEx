@@ -24,6 +24,22 @@ public class RegExp {
         buffers = new HashMap<>();
     }
 
+    // минимизация ДКА
+    private void minimize() {
+        // каждому состоянию соответствует имя группы, в которую это состояние входит.
+        int groupMax = 2;
+        HashMap<DFAState, Integer> split = new HashMap<>();
+        for (DFAState st : states) {
+            split.put(st, 0);
+        }
+        for (DFAState st : finishStates) {
+            split.put(st, 1);
+        }
+        // Теперь, пока не получится так, что ничего не меняется, если состояния имеют одинаковые переходы и они переходят в одинаковые группы, то помещаем их в одну группу
+
+    }
+
+
     // класс перехода автомата. Позволяет хранить не просто следующее состояние, но и аттрибуты самого перехода
     private class DFATransition {
         DFAState next;
