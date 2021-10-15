@@ -1,5 +1,7 @@
 package ru.jawaprogrammer.autolaba02.utils;
 
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.*;
 
 /**
@@ -24,10 +26,60 @@ public class RegExp {
         buffers = new HashMap<>();
     }
 
+    private HashSet<DFAState> byGroup(HashMap<DFAState, Integer> split, int group) {
+        HashSet<DFAState> ret = new HashSet<>();
+        for (Map.Entry<DFAState, Integer> e : split.entrySet()) {
+            if (e.getValue() == group) ret.add(e.getKey());
+        }
+        return ret;
+    }
+
+    public void saveGraphviz(String filename) throws IOException {
+        FileWriter fw = new FileWriter(filename);
+        fw.write("digraph RegEx {\n" +
+                "\n" +
+                "    node\n" +
+                "        [shape=Mrecord width=1.5];\n" +
+                "\n" +
+                "    subgraph cluster_RegularExpression {\n");
+
+        DFAState[] stats = new DFAState[states.size()];
+        stats = states.toArray(stats);
+        HashMap<DFAState, Integer> nameMap = new HashMap<>();
+        for (int i = 0; i < stats.length; ++i) {
+            nameMap.put(stats[i], i);
+            String label = "" + i;
+            if (finishStates.contains(stats[i]))
+                label += " (accept)";
+            if (stats[i] == start)
+                label = "(start) " + label;
+            fw.write(" \"Automat2Map::" + i + "\"\n" +
+                    "[label=\"{" + label + "}\"];\n");
+        }
+        for (int i = 0; i < stats.length; ++i) {
+            for (Map.Entry<Character, DFATransition> tran : stats[i].trans.entrySet()) {
+                fw.write(" \"Automat2Map::" + i + "\" -> \"Automat2Map::" + nameMap.get(tran.getValue().next) + "\"\n" +
+                        "[label=\"" + tran.getKey() + "\"];\n");
+            }
+        }
+
+        nameMap.clear();
+        nameMap = null;
+        fw.write("}}");
+        fw.close();
+    }
+
+
     // минимизация ДКА
-    private void minimize() {
+    public void minimize() {
+        minimize1();
+        minimize1();
+    }
+
+    // минимизация ДКА
+    private void minimize1() {
         // каждому состоянию соответствует имя группы, в которую это состояние входит.
-        int groupMax = 2;
+        int groupMax = 2, prew = 0;
         HashMap<DFAState, Integer> split = new HashMap<>();
         for (DFAState st : states) {
             split.put(st, 0);
@@ -35,8 +87,89 @@ public class RegExp {
         for (DFAState st : finishStates) {
             split.put(st, 1);
         }
-        // Теперь, пока не получится так, что ничего не меняется, если состояния имеют одинаковые переходы и они переходят в одинаковые группы, то помещаем их в одну группу
+        boolean changed = true;
+        while (changed) { // пока новое разбиение отличается от прошлого
+            changed = false;
+            prew = groupMax;
+            for (int i = 0; i < prew; ++i) { // для каждой группы в разбиении
+                HashSet<DFAState> toCheck = byGroup(split, i);
+                HashSet<DFAState> proceed = new HashSet<>();
+                for (DFAState a : toCheck) {
+                    for (DFAState b : toCheck) {
+                        if (a == b || proceed.contains(b)) continue;
+                        // для каждой пары состояний в группе
+                        // у них должны совпадать переходы и для каждого перехода новые состояния должны быть в одной группе
+                        // для начала можно создать список всех переходов первого и второго состояния
+                        HashSet<Character> trans = new HashSet<>();
+                        trans.addAll(a.trans.keySet());
+                        trans.addAll(b.trans.keySet());
+                        boolean equals = true;
+                        for (char ch : trans) {
+                            DFATransition ta = a.trans.getOrDefault(ch, null), tb = b.trans.getOrDefault(ch, null);
+                            if (ta == null || tb == null || split.get(ta.next) != split.get(tb.next)) {
+                                equals = false;
+                                break;
+                            }
+                        }
+                        if (!equals) {
+                            // переходы переводят в разные группы, или одно из состояний вообще не имеет данного перехода
+                            // тогда состояние b будет помещено в новую группу
+                            split.put(b, ++groupMax);
+                            changed = true;
+                        } else {
+                            // это на случай, если состояния попали в разные группы по отношению к третьей, хотя друг для друга должны были быть в одной
+                            int gr_a = split.get(a), gr_b = split.get(b);
+                            if (gr_a != gr_b) changed = true;
+                            split.put(b, gr_a);
+                        }
+                    }
+                    proceed.add(a);
+                }
+                toCheck.clear();
+                proceed.clear();
+                groupMax = 0;
+                for (int mx : split.values()) if (mx > groupMax) groupMax = mx;
+            }
+        }
 
+        // теперь запоминаем стартовую и принимающие группы и переходы между группами
+        int start = -1;
+        HashSet<Integer> finish = new HashSet<>();
+        HashMap<Integer, HashMap<Character, Integer>> transMap = new HashMap<>();
+        for (DFAState st : states) {
+            int g = split.get(st);
+            if (st == this.start) start = g;
+            if (finishStates.contains(st)) finish.add(g);
+            HashMap<Character, Integer> trans = transMap.getOrDefault(g, new HashMap<>());
+            for (Map.Entry<Character, DFATransition> tr : st.trans.entrySet())
+                trans.put(tr.getKey(), split.get(tr.getValue().next));
+            transMap.put(g, trans);
+        }
+        // новые представители групп
+        HashMap<Integer, DFAState> newStates = new HashMap<>();
+        // Теперь оригинальные состояния нам вообще не нужны. Можем полностью очистить автомат перед его перестройкой.
+        clear();
+        for (Map.Entry<Integer, HashMap<Character, Integer>> trans : transMap.entrySet()) {
+            DFAState stateA = newStates.getOrDefault(trans.getKey(), new DFAState());
+            for (Map.Entry<Character, Integer> tr : trans.getValue().entrySet()) {
+                DFAState stateB = newStates.getOrDefault(tr.getValue(), new DFAState());
+                DFATransition transition = new DFATransition();
+                transition.next = stateB;
+                stateA.trans.put(tr.getKey(), transition);
+                newStates.put(tr.getValue(), stateB);
+            }
+            newStates.put(trans.getKey(), stateA);
+        }
+        HashSet<DFAState> finishStates = new HashSet<>();
+        for (int i : finish)
+            finishStates.add(newStates.get(i));
+        init(newStates.get(start), finishStates, new HashSet<>(newStates.values()));
+        newStates.clear();
+        finish.clear();
+        for (Map.Entry<Integer, HashMap<Character, Integer>> trans : transMap.entrySet()) {
+            trans.getValue().clear();
+        }
+        transMap.clear();
     }
 
 
@@ -593,6 +726,8 @@ public class RegExp {
             }
         }
         // Аналогом якоря из лекций будет токен STRING с null указателем. Так можно будет понять, что это именно якорь
+        list.add(0, new Token(Token.TokenType.OPEN_SCOPE, null));
+        list.add(new Token(Token.TokenType.CLOSE_SCOPE, null));
         list.add(new Token(Token.TokenType.STRING, null));
         Token[] tokens = new Token[list.size()];
         tokens = list.toArray(tokens); // Количество токенов меняться больше не будет. Удобнее далее работать с массивом
