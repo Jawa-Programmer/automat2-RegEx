@@ -10,7 +10,7 @@ import java.util.*;
 public class RegExp {
 
     private DFAState start;
-    private HashSet<DFAState> states;
+    DFAState[] states;
     private HashSet<DFAState> finishStates;
     //private HashMap<DFAState, HashSet<String>> buffersMap;
     private HashMap<String, StringBuilder> buffers;
@@ -19,7 +19,7 @@ public class RegExp {
 
     }
 
-    private void init(DFAState start, HashSet<DFAState> finishStates, HashSet<DFAState> states) {
+    private void init(DFAState start, HashSet<DFAState> finishStates, DFAState[] states) {
         this.start = start;
         this.finishStates = finishStates;
         this.states = states;
@@ -43,41 +43,31 @@ public class RegExp {
                 "\n" +
                 "    subgraph cluster_RegularExpression {\n");
 
-        DFAState[] stats = new DFAState[states.size()];
-        stats = states.toArray(stats);
         HashMap<DFAState, Integer> nameMap = new HashMap<>();
-        for (int i = 0; i < stats.length; ++i) {
-            nameMap.put(stats[i], i);
+        for (int i = 0; i < states.length; ++i) {
+            nameMap.put(states[i], i);
             String label = "" + i;
-            if (finishStates.contains(stats[i]))
+            if (finishStates.contains(states[i]))
                 label += " (accept)";
-            if (stats[i] == start)
+            if (states[i] == start)
                 label = "(start) " + label;
             fw.write(" \"Automat2Map::" + i + "\"\n" +
                     "[label=\"{" + label + "}\"];\n");
         }
-        for (int i = 0; i < stats.length; ++i) {
-            for (Map.Entry<Character, DFATransition> tran : stats[i].trans.entrySet()) {
+        for (int i = 0; i < states.length; ++i) {
+            for (Map.Entry<Character, DFATransition> tran : states[i].trans.entrySet()) {
                 fw.write(" \"Automat2Map::" + i + "\" -> \"Automat2Map::" + nameMap.get(tran.getValue().next) + "\"\n" +
                         "[label=\"" + tran.getKey() + "\"];\n");
             }
         }
 
         nameMap.clear();
-        nameMap = null;
-        fw.write("}}");
+        fw.write("}\n}");
         fw.close();
     }
 
-
     // минимизация ДКА
     public void minimize() {
-        minimize1();
-        minimize1();
-    }
-
-    // минимизация ДКА
-    private void minimize1() {
         // каждому состоянию соответствует имя группы, в которую это состояние входит.
         int groupMax = 2, prew = 0;
         HashMap<DFAState, Integer> split = new HashMap<>();
@@ -88,50 +78,68 @@ public class RegExp {
             split.put(st, 1);
         }
         boolean changed = true;
+        mainLoop:
         while (changed) { // пока новое разбиение отличается от прошлого
             changed = false;
             prew = groupMax;
             for (int i = 0; i < prew; ++i) { // для каждой группы в разбиении
                 HashSet<DFAState> toCheck = byGroup(split, i);
-                HashSet<DFAState> proceed = new HashSet<>();
                 for (DFAState a : toCheck) {
                     for (DFAState b : toCheck) {
-                        if (a == b || proceed.contains(b)) continue;
+                        // if (a == b || proceed.contains(b)) continue;
+                        if (a == b) continue;
                         // для каждой пары состояний в группе
                         // у них должны совпадать переходы и для каждого перехода новые состояния должны быть в одной группе
                         // для начала можно создать список всех переходов первого и второго состояния
-                        HashSet<Character> trans = new HashSet<>();
-                        trans.addAll(a.trans.keySet());
-                        trans.addAll(b.trans.keySet());
                         boolean equals = true;
-                        for (char ch : trans) {
-                            DFATransition ta = a.trans.getOrDefault(ch, null), tb = b.trans.getOrDefault(ch, null);
-                            if (ta == null || tb == null || split.get(ta.next) != split.get(tb.next)) {
-                                equals = false;
-                                break;
+                        {
+                            HashSet<Character> trans = new HashSet<>();
+                            trans.addAll(a.trans.keySet());
+                            trans.addAll(b.trans.keySet());
+                            for (char ch : trans) {
+                                DFATransition ta = a.trans.getOrDefault(ch, null), tb = b.trans.getOrDefault(ch, null);
+                                if (ta == null || tb == null || split.get(ta.next) != split.get(tb.next)) {
+                                    equals = false;
+                                    break;
+                                }
                             }
                         }
                         if (!equals) {
                             // переходы переводят в разные группы, или одно из состояний вообще не имеет данного перехода
                             // тогда состояние b будет помещено в новую группу
-                            split.put(b, ++groupMax);
+                            // при этом мы переместим в новую группу и тех, кого еще не проверили, но кто тоже может быть в одной группе с b
+                            int group = ++groupMax;
+                            LinkedList<DFAState> toNewGroup = new LinkedList<>();
+                            toNewGroup.add(b);
                             changed = true;
-                        } else {
-                            // это на случай, если состояния попали в разные группы по отношению к третьей, хотя друг для друга должны были быть в одной
-                            int gr_a = split.get(a), gr_b = split.get(b);
-                            if (gr_a != gr_b) changed = true;
-                            split.put(b, gr_a);
+                            for (DFAState c : toCheck) {
+                                if (b == c) continue;
+                                HashSet<Character> trans = new HashSet<>();
+                                boolean equals2 = true;
+                                trans.addAll(b.trans.keySet());
+                                trans.addAll(c.trans.keySet());
+                                for (char ch : trans) {
+                                    DFATransition tb = b.trans.getOrDefault(ch, null), tc = c.trans.getOrDefault(ch, null);
+                                    if (tb == null || tc == null || split.get(tb.next) != split.get(tc.next)) {
+                                        equals2 = false;
+                                        break;
+                                    }
+                                }
+                                if (equals2) {
+                                    toNewGroup.add(c);
+                                }
+                            }
+                            for (DFAState c : toNewGroup)
+                                split.put(c, group);
+                            continue mainLoop;
                         }
                     }
-                    proceed.add(a);
                 }
                 toCheck.clear();
-                proceed.clear();
                 groupMax = 0;
                 for (int mx : split.values()) if (mx > groupMax) groupMax = mx;
             }
         }
-
         // теперь запоминаем стартовую и принимающие группы и переходы между группами
         int start = -1;
         HashSet<Integer> finish = new HashSet<>();
@@ -151,6 +159,7 @@ public class RegExp {
         clear();
         for (Map.Entry<Integer, HashMap<Character, Integer>> trans : transMap.entrySet()) {
             DFAState stateA = newStates.getOrDefault(trans.getKey(), new DFAState());
+            newStates.put(trans.getKey(), stateA);
             for (Map.Entry<Character, Integer> tr : trans.getValue().entrySet()) {
                 DFAState stateB = newStates.getOrDefault(tr.getValue(), new DFAState());
                 DFATransition transition = new DFATransition();
@@ -158,12 +167,13 @@ public class RegExp {
                 stateA.trans.put(tr.getKey(), transition);
                 newStates.put(tr.getValue(), stateB);
             }
-            newStates.put(trans.getKey(), stateA);
         }
         HashSet<DFAState> finishStates = new HashSet<>();
         for (int i : finish)
             finishStates.add(newStates.get(i));
-        init(newStates.get(start), finishStates, new HashSet<>(newStates.values()));
+        DFAState[] sts = new DFAState[newStates.size()];
+        sts = newStates.values().toArray(sts);
+        init(newStates.get(start), finishStates, sts);
         newStates.clear();
         finish.clear();
         for (Map.Entry<Integer, HashMap<Character, Integer>> trans : transMap.entrySet()) {
@@ -325,6 +335,110 @@ public class RegExp {
                 case NAME: // ссылка на буфер захвата
                 case STRING: // строка
             }
+        }
+
+        // выполняет инверсию регулярного выражения, представленного данным деревом
+        public void revers() {
+            switch (type) {
+                case CONCAT: {
+                    STNode tmp = childA;
+                    childA = childB;
+                    childB = tmp;
+                    childA.revers();
+                    childB.revers();
+
+                    first.clear();
+                    last.clear();
+                    first.addAll(childA.first);
+                    if (childA.isNullabel)
+                        first.addAll(childB.first);
+                    last.addAll(childB.last);
+                    if (childB.isNullabel) last.addAll(childA.last);
+                    isNullabel = childB.isNullabel && childA.isNullabel;
+                    break;
+                }
+                case CASE:
+                    childA.revers();
+                    childB.revers();
+                    first.clear();
+                    last.clear();
+                    first.addAll(childA.first);
+                    first.addAll(childB.first);
+                    last.addAll(childA.last);
+                    last.addAll(childB.last);
+                    isNullabel = childB.isNullabel || childA.isNullabel;
+                    break;
+                case CLINI:
+                case OPTION:
+                    childA.revers();
+                    isNullabel = true;
+                    first.clear();
+                    last.clear();
+                    first.addAll(childA.first);
+                    last.addAll(childA.last);
+                    break;
+                case NAME:
+                case STRING:
+                    break;
+            }
+        }
+
+        /// метод восстанавливает строку из дерева (попутно удаляя некоторые легкообноружимые излишества)
+        public String restoreString() {
+            StringBuilder ret = new StringBuilder();
+            switch (type) {
+                case CONCAT: {
+                    boolean retReady = false;
+                    if (childA.type == NodeType.CLINI) {
+                        String left = childA.childA.restoreString();
+                        if (childB.type.ISOO()) {
+                            String right = childB.childA.restoreString();
+                            if (left.equals(right)) {
+                                ret.append(left).append("...");
+                                retReady = true;
+                            }
+                        }
+                    } else if (childA.type == NodeType.OPTION) {
+                        String left = childA.childA.restoreString();
+                        if (childB.type.ISOO()) {
+                            String right = childB.childA.restoreString();
+                            if (left.equals(right)) {
+                                ret.append(right).append("...");
+                                retReady = true;
+                            }
+                        }
+                    }
+                    if (!retReady)
+                        ret.append(childA.restoreString()).append(childB.restoreString());
+                    break;
+                }
+                case CASE:
+                    if ((childA.type == NodeType.CASE || childB.type == NodeType.CASE))
+                        ret.append(childA.restoreString()).append('|').append(childB.restoreString());
+                    else
+                        ret.append('(').append(childA.restoreString()).append('|').append(childB.restoreString()).append(')');
+                    break;
+                case CLINI:
+                    ret.append(childA.restoreString()).append("...");
+                    break;
+                case OPTION:
+                    ret.append(childA.restoreString());
+                    if (parent == null || !parent.type.ISOO())
+                        ret.append("?");
+                    break;
+                case NAME:
+                    ret.append('<').append(token.value).append('>');
+                    break;
+                case STRING:
+                    if (token.value != null) {
+                        if (SPECIAL_LETTERS.contains(token.value) || (char) token.value == '.')
+                            ret.append('%').append(token.value).append('%');
+                        else
+                            ret.append(token.value);
+                    }
+                    break;
+            }
+            return ret.toString();
         }
 
         @Override
@@ -543,13 +657,7 @@ public class RegExp {
     private final static HashSet<Character> SPECIAL_LETTERS = new HashSet<>(Arrays.asList('{', '}', '<', '>', '(', ')', '|', '?', '%'));
     private static HashMap<Integer, HashSet<String>> buffersPosAssociation, startBuffersPosAssociation;
 
-    /**
-     * Метод выполняет построение ДКА по заданному регулярному выражению
-     *
-     * @param regExp строка регулярного выражения
-     * @return объект обертка для ДКА.
-     */
-    public static RegExp compile(String regExp) {
+    private static Token[] tokenization(String regExp) {
         /*  Шаг первый - разбить строку на набор лексем согласно правилам
          *  { } ... < > ( ) | ? %
          *  Будет применена следующая оптимизация: если встретил %, то все что идет дальше до следующего % будет считаться просто символами
@@ -559,108 +667,85 @@ public class RegExp {
          */
         char[] str = regExp.toCharArray();
         LinkedList<Token> list = new LinkedList<>();
-        StringBuilder builder = null;
         for (int i = 0; i < str.length; ++i) {
-            if (SPECIAL_LETTERS.contains(str[i]) || (str[i] == '.' && i + 2 < regExp.length() && str[i + 1] == '.' && str[i + 2] == '.')) {
-                // мы наткнулись на спец символ или троеточие
-                if (builder != null) {
-                    list.add(new Token(Token.TokenType.STRING, builder.toString())); // то, что накопилось к данному моменту мы сохранили
-                    builder = null; // стерли буфер
-                }
-            } else {
-                if (builder == null) builder = new StringBuilder(); // если пусто - начинаем заного
-                builder.append(str[i]);
-                continue; // мы не натыкались на спец символ. Продолжаем собирать строку
-            }
-            switch (str[i]) {
-                case '{': {
-                    StringBuilder buff = new StringBuilder();
-                    int start = i;
-                    for (++i; i < str.length && str[i] != '}'; ++i)
-                        buff.append(str[i]);
-                    if (i == str.length)
-                        throw new RuntimeException("Неверный синтаксис регулярного выражения. Отсутсвует закрывающая скобка } для скобки на позиции " + i);
-                    Integer value = null;
-                    try {
-                        value = Integer.parseInt(buff.toString());
-                        if (value <= 0) throw new NumberFormatException();
-                    } catch (NumberFormatException e) {
-                        throw new RuntimeException("Неверный синтаксис регулярного выражения. Между { и } допускается использование только положительных чисел");
-                    }
-                    if (value > 1) // мы избегаем бесполезного {1}
-                        list.add(new Token(Token.TokenType.REPEAT_AMOUNT, value));
-                }
-                continue;
-                case '.':
-                    if (i + 2 < regExp.length() && str[i + 1] == '.' && str[i + 2] == '.') {
-                        i += 2;
-                        list.add(new Token(Token.TokenType.ELLIPSIS));
+            if (!(SPECIAL_LETTERS.contains(str[i]) || (str[i] == '.' && i + 2 < regExp.length() && str[i + 1] == '.' && str[i + 2] == '.'))) {
+                // мы не натыкались на спец символ.
+                list.add(new Token(Token.TokenType.STRING, str[i]));
+            } else
+                switch (str[i]) {
+                    case '{': {
+                        StringBuilder buff = new StringBuilder();
+                        int start = i;
+                        for (++i; i < str.length && str[i] != '}'; ++i)
+                            buff.append(str[i]);
+                        if (i == str.length)
+                            throw new RuntimeException("Неверный синтаксис регулярного выражения. Отсутсвует закрывающая скобка } для скобки на позиции " + i);
+                        Integer value = null;
+                        try {
+                            value = Integer.parseInt(buff.toString());
+                            if (value <= 0) throw new NumberFormatException();
+                        } catch (NumberFormatException e) {
+                            throw new RuntimeException("Неверный синтаксис регулярного выражения. Между { и } допускается использование только положительных чисел");
+                        }
+                        if (value > 1) // мы избегаем бесполезного {1}
+                            list.add(new Token(Token.TokenType.REPEAT_AMOUNT, value));
                     }
                     continue;
-                case '<': {
-                    StringBuilder buff = new StringBuilder();
-                    int start = i;
-                    for (++i; i < str.length && str[i] != '>'; ++i)
-                        buff.append(str[i]);
-                    if (i == str.length)
-                        throw new RuntimeException("Неверный синтаксис регулярного выражения. Отсутсвует закрывающая скобка > для скобки на позиции " + start);
-                    list.add(new Token(Token.TokenType.CAPTURE_GROUP_NAME, buff.toString()));
-                }
-                continue;
-                case '(':
-                    list.add(new Token(Token.TokenType.OPEN_SCOPE));
-                    continue;
-                case ')':
-                    list.add(new Token(Token.TokenType.CLOSE_SCOPE));
-                    continue;
-                case '|':
-                    list.add(new Token(Token.TokenType.CASE_LINE));
-                    continue;
-                case '?':
-                    list.add(new Token(Token.TokenType.QUESTION_SIGN));
-                    continue;
-                case '%':// тут возможны три случая. %% это ошибка. %%% это строка "%", %что-то% значит строка "что-то"
-                    if (i + 2 < str.length) {
-                        if (str[i + 2] == '%') {// тут обработали случай %a% где a любой символ, даже %
-                            list.add(new Token(Token.TokenType.STRING, "" + str[i + 1]));
+                    case '.':
+                        if (i + 2 < regExp.length() && str[i + 1] == '.' && str[i + 2] == '.') {
                             i += 2;
-                            continue;
+                            list.add(new Token(Token.TokenType.ELLIPSIS));
                         }
-                        if (str[i + 1] != '%') {
-                            StringBuilder buff = new StringBuilder();
-                            int start = i;
-                            for (++i; i < str.length && str[i] != '%'; ++i)
-                                buff.append(str[i]);
-                            if (i == str.length)
-                                throw new RuntimeException("Неверный синтаксис регулярного выражения. Отсутствует закрывающий экранирующий символ %. Открывающая скобка на позиции " + start);
-                            list.add(new Token(Token.TokenType.STRING, buff.toString()));
-                            continue;
-                        }
+                        continue;
+                    case '<': {
+                        StringBuilder buff = new StringBuilder();
+                        int start = i;
+                        for (++i; i < str.length && str[i] != '>'; ++i)
+                            buff.append(str[i]);
+                        if (i == str.length)
+                            throw new RuntimeException("Неверный синтаксис регулярного выражения. Отсутсвует закрывающая скобка > для скобки на позиции " + start);
+                        list.add(new Token(Token.TokenType.CAPTURE_GROUP_NAME, buff.toString()));
                     }
-                    throw new RuntimeException("Неверный синтаксис регулярного выражения. Ошибка с символами экранирования %. Примерная позиция " + i);
-            }
+                    continue;
+                    case '(':
+                        list.add(new Token(Token.TokenType.OPEN_SCOPE));
+                        continue;
+                    case ')':
+                        list.add(new Token(Token.TokenType.CLOSE_SCOPE));
+                        continue;
+                    case '|':
+                        list.add(new Token(Token.TokenType.CASE_LINE));
+                        continue;
+                    case '?':
+                        list.add(new Token(Token.TokenType.QUESTION_SIGN));
+                        continue;
+                    case '%':// тут возможны три случая. %% это ошибка. %%% это строка "%", %что-то% значит строка "что-то"
+                        if (i + 2 < str.length) {
+                            if (str[i + 2] == '%') {// тут обработали случай %a% где a любой символ, даже %
+                                list.add(new Token(Token.TokenType.STRING, str[i + 1]));
+                                i += 2;
+                                continue;
+                            }
+                            if (str[i + 1] != '%') {
+                                int start = i;
+                                for (++i; i < str.length && str[i] != '%'; ++i)
+                                    list.add(new Token(Token.TokenType.STRING, str[i]));
+                                if (i == str.length)
+                                    throw new RuntimeException("Неверный синтаксис регулярного выражения. Отсутствует закрывающий экранирующий символ %. Открывающий символ на позиции " + start);
+                                continue;
+                            }
+                        }
+                        throw new RuntimeException("Неверный синтаксис регулярного выражения. Ошибка с символами экранирования %. Примерная позиция " + i);
+                }
         }
         // буфер не пуст - последний токен еще не поместили в список
-        if (builder != null) {
-            list.add(new Token(Token.TokenType.STRING, builder.toString())); // то, что накопилось к данному моменту мы сохранили
-            builder = null;
-        }
+
         str = null;
-        // Теперь проведем дополнительные оптимизации: конкатенацию строк, удаление бессмысленных операций (по типу ...{n} <=> ...)
+        // Теперь проведем дополнительные оптимизации: удаление бессмысленных операций (по типу ...{n} <=> ...)
         Iterator<Token> it = list.iterator();
         while (it.hasNext()) {
             Token t = it.next();
-            // если в списке подряд много строк, то зачем хранить их как отдельные? пусть сразу лежат как одна большая строка
-            // это автоматически упрощает будущее построение АСД, так как я точно знаю, что после строки всегда сразу же метасимвол или конец.
-            while (t.type == Token.TokenType.STRING && it.hasNext()) {
-                Token t2 = it.next();
-                if (t2.type == Token.TokenType.STRING) {
-                    it.remove();
-                    t.value = (String) t.value + t2.value;
-                } else {
-                    t = t2;
-                }
-            }
+
             while (t.type == Token.TokenType.ELLIPSIS && it.hasNext()) { // ...?, ...... и ...{n} действуют так же как и ...
                 Token t2 = it.next();
                 if (t2.type == Token.TokenType.REPEAT_AMOUNT || t2.type == Token.TokenType.QUESTION_SIGN || t2.type == Token.TokenType.ELLIPSIS) {
@@ -671,28 +756,38 @@ public class RegExp {
                 Token t2 = it.next();
                 if (t2.type == Token.TokenType.QUESTION_SIGN) {
                     it.remove();
-                } else t = t2;
+                } else if (t2.type == Token.TokenType.ELLIPSIS) {
+                    it.remove();
+                    t.type = Token.TokenType.ELLIPSIS;
+                } else {
+                    t = t2;
+                }
             }
         }
         // сделать {n} на уровне АСД не получится, так как по алгоритму ссылаться они будут на ту же строку и по факту ничего не изменится
         // по этому {n} будет реализован путем тупого копирования токенов исходной регулярки
+
+        // однако предыдущее упрощение делает неявную конкатенацию более приоритетной, чем квантификаторы ... ? и {n}
+        // по этому при проходе по токенам будем дополнительно расщеплять предшествующие квантификаторам строки, отделяя последнюю букву
         {
             int b = 0;
             Token[] tmp = new Token[list.size()];
             tmp = list.toArray(tmp);
             for (int a = 0; a < tmp.length; ++a, ++b) {
+
                 if (tmp[a].type == Token.TokenType.REPEAT_AMOUNT) {
                     if (a == 0)
                         throw new RuntimeException("Неверный синтаксис регулярного выражения. Ошибка с {n}. Примерная позиция " + a);
                     Token prew = tmp[a - 1];
                     int co = (int) tmp[a].value;
-                    if (prew.type == Token.TokenType.STRING) {
+                   /* if (prew.type == Token.TokenType.STRING) {
                         /// строки тупо наращиваем
-                        String base = (String) prew.value;
-                        prew.value = base.repeat(Math.max(0, co));
+                        for (int i = 1; i < co; ++i)
+                            list.add(b++, new Token(Token.TokenType.STRING, prew.value));
                         list.remove(b);
                         --b;
-                    } else if (prew.type == Token.TokenType.CAPTURE_GROUP_NAME) {
+                    } else*/
+                    if (prew.type.isSN()) {
                         // имена групп захвата повторяем n раз
                         for (int i = 1; i < co; ++i, ++b)
                             list.add(b, prew);
@@ -724,6 +819,7 @@ public class RegExp {
                         throw new RuntimeException("Неверный синтаксис регулярного выражения. Использовать {n} можно после группы или строки. Примерное положение: " + a);
                 }
             }
+
         }
         // Аналогом якоря из лекций будет токен STRING с null указателем. Так можно будет понять, что это именно якорь
         list.add(0, new Token(Token.TokenType.OPEN_SCOPE, null));
@@ -733,19 +829,37 @@ public class RegExp {
         tokens = list.toArray(tokens); // Количество токенов меняться больше не будет. Удобнее далее работать с массивом
         list.clear();
         list = null;
+        return tokens;
+    }
+
+    /**
+     * Метод выполняет построение ДКА по заданному регулярному выражению
+     *
+     * @param regExp строка регулярного выражения
+     * @return объект обертка для ДКА.
+     */
+    public static RegExp compile(String regExp) {
+
+        Token[] tokens = tokenization(regExp); // производим токенизацию
+        STNode root = findCase(tokens, 0, tokens.length, null);
 /*
         for (Token t : tokens)
             System.out.println(t);
 */
+        //     System.out.println(root);
+        RegExp ret = generate(tokens, root);
+        root.clean();
+        System.gc(); // неплохо бы подчистить мусор))
+        return ret;
+    }
 
+    private static RegExp generate(Token[] tokens, STNode root) {
         // Теперь необходимо построить синтаксическое дерево. Листья - строки, а промежуточные узлы - операторы
         // Для построения будем использовать нисходящий рекурсивный разбор. Потому что его я уже знаю, а многократное сканирование с лекции пересматривать лень)))
         // В данном алгоритме менее приоритетная операция является предком для более приоритетной. Строка делится на две части и обе обрабатываются рекурсивно.
         // Так как я уже соединил все подряд идущие строки меж собой, данное АСД почти ничем не отличается от АСД для математических выражений.
         buffersPosAssociation = new HashMap<>();
         startBuffersPosAssociation = new HashMap<>();
-        STNode root = findCase(tokens, 0, tokens.length, null);
-        System.out.println(root);
 
         // Следующий этап построения: обход дерева с целью восстановления FP множеств токенов
         HashMap<Integer, HashSet<Integer>> FPs = new HashMap<>();
@@ -780,12 +894,12 @@ public class RegExp {
             /// достаточно для каждого токена из имени состояния проложить "тропинку" к следующему состоянию
             /// если придет нерассмотренный символ - будет возвращено null и автомат остановится
             DFAState next = unproceed.poll();
-            // для того, что бы одинаковые строки не затмевали друг друга, придется ввести словарь всех локальных строк
-            // и каждой строке добавить множества следующих позиций
-            HashMap<String, HashSet<Integer>> FPsStr = new HashMap<>();
+            // для того, что бы одинаковые буквы не затмевали друг друга, придется ввести словарь всех локальных букв
+            // и каждой букве добавить множества следующих позиций
+            HashMap<Character, HashSet<Integer>> FPsStr = new HashMap<>();
             for (int st : next.name) {
                 if (st == finit) continue;
-                String strng = (String) tokens[st].value;
+                char strng = (char) tokens[st].value;
                 HashSet<Integer> set = FPsStr.getOrDefault(strng, null);
                 if (set == null) {
                     set = new HashSet<>();
@@ -797,10 +911,10 @@ public class RegExp {
                 // пока что игнорирую тот факт, что это может оказаться имя буфера, а не строка.
                 if (st == finit) continue; // якорь обрабатывать не надо)
                 DFAState cur = next;
-                String strng = (String) tokens[st].value;
-                char[] arr = strng.toCharArray();
-
-                HashSet<String> curBuffs = buffersPosAssociation.getOrDefault(st, null);
+                char strng = (char) tokens[st].value;
+                DFATransition nxtr = cur.trans.getOrDefault(strng, null);
+                if (nxtr == null) {
+                    HashSet<String> curBuffs = buffersPosAssociation.getOrDefault(st, null);
 
               /*  if (curBuffs != null) {
                     HashSet<String> tmp = buffersMap.getOrDefault(cur, new HashSet<>());
@@ -808,52 +922,29 @@ public class RegExp {
                     buffersMap.put(cur, tmp);
                 }*/
 
-                HashSet<Integer> nexts = FPsStr.get(strng); // получили множества следующих состояний (с учетом того, что строки могут совпадать)
-                DFAState nnnx = names.getOrDefault(nexts, null);
-                if (nnnx == null) {
-                    nnnx = toReturn.getDFAState();
-                    states.add(nnnx);
-                    nnnx.name = nexts;
-                    unproceed.add(nnnx);
-                    names.put(nexts, nnnx);
-                }
-
-                for (int i = 0; i < arr.length - 1; ++i) {
-                    /// генератор "пути". Ищет оптимально (например у (me|mem) будет общее начало, но после е будет расщепление путей
-                    DFATransition nx = cur.trans.getOrDefault(arr[i], null);
-                    if (nx == null) {
-                        nx = toReturn.getDFATransition();
-                        nx.next = toReturn.getDFAState();
-                        states.add(nx.next);
-                        cur.trans.put(arr[i], nx);
+                    HashSet<Integer> nexts = FPsStr.get(strng); // получили множества следующих состояний (с учетом того, что строки могут совпадать)
+                    DFAState nnnx = names.getOrDefault(nexts, null);
+                    if (nnnx == null) {
+                        nnnx = toReturn.getDFAState();
+                        states.add(nnnx);
+                        nnnx.name = nexts;
+                        unproceed.add(nnnx);
+                        names.put(nexts, nnnx);
                     }
+                    // теперь в cur лежит последнее безымянное состояние данного пути. Ему нужно задать переход в nexts
+
+                    nxtr = toReturn.getDFATransition();
+                    nxtr.next = nnnx;
                     if (curBuffs != null) {
-                        nx.activeBuffers.addAll(curBuffs);
+                        nxtr.activeBuffers.addAll(curBuffs);
                     }
-                    if (i == 0) {
-                        for (int a : nnnx.name) {
-                            HashSet<String> tmp = startBuffersPosAssociation.getOrDefault(a, null);
-                            if (tmp != null)
-                                nx.resetBuffers.addAll(tmp);
-                        }
-                    }
-                    cur = nx.next;
-                }
-                // теперь в cur лежит последнее безымянное состояние данного пути. Ему нужно задать переход в nexts
-
-                DFATransition nxtr = toReturn.getDFATransition();
-                nxtr.next = nnnx;
-                if (curBuffs != null) {
-                    nxtr.activeBuffers.addAll(curBuffs);
-                }
-                if (arr.length == 1) {
                     for (int a : nnnx.name) {
                         HashSet<String> tmp = startBuffersPosAssociation.getOrDefault(a, null);
                         if (tmp != null)
                             nxtr.resetBuffers.addAll(tmp);
                     }
+                    cur.trans.put(strng, nxtr);
                 }
-                cur.trans.put(arr[arr.length - 1], nxtr);
             }
             FPsStr.clear();
         }
@@ -871,9 +962,10 @@ public class RegExp {
         buffersPosAssociation = null;
         startBuffersPosAssociation.clear();
         startBuffersPosAssociation = null;
-        root.clean();
-        System.gc(); // неплохо бы подчистить мусор))
-        toReturn.init(start, finish, states);
+        DFAState[] retState = new DFAState[states.size()];
+        retState = states.toArray(retState);
+        toReturn.init(start, finish, retState);
+        states.clear();
         return toReturn;
     }
 
@@ -885,31 +977,12 @@ public class RegExp {
      */
     public boolean checkString(String s) {
         DFAState cur = start;
-       /* {
-            HashSet<String> bufs = buffersMap.getOrDefault(cur, null);
-            if (bufs != null) {
-                for (String str : bufs) {
-                    buffers.put(str, new StringBuilder());
-                }
-            }
-        }*/
         char[] arr = s.toCharArray();
         for (char c : arr) {
-            //HashSet<String> bufs1 = buffersMap.getOrDefault(cur, null);
             cur = cur.next(c);
-            //HashSet<String> bufs2 = buffersMap.getOrDefault(cur, null);
             if (cur == null)
                 return false; // неопределенный переход значит, что автомат досрочно может вынести отрицательный вердикт
-            /*if (bufs1 == null && bufs2 != null) {
-                for (String str : bufs2) {
-                    buffers.put(str, new StringBuilder());
-                }
-            }
-            if (bufs1 != null) {
-                for (String str : bufs1)
-                    buffers.get(str).append(c);
 
-            }*/
         }
         return finishStates.contains(cur);
     }
@@ -920,8 +993,359 @@ public class RegExp {
     public void clear() {
         for (DFAState st : states)
             st.clear();
-        states.clear();
+        states = null;
         start.clear();
         finishStates.clear();
+        System.gc();
+    }
+
+    // данный класс будет являться ключем в словаре "(i, j, k) -> R(i, j, k)"
+    private static class Triplet {
+        private Triplet(int i, int j, int k) {
+            this.i = i;
+            this.j = j;
+            this.k = k;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+
+            Triplet triplet = (Triplet) o;
+
+            if (i != triplet.i) return false;
+            if (j != triplet.j) return false;
+            return k == triplet.k;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = i;
+            result = 31 * result + j;
+            result = 31 * result + k;
+            return result;
+        }
+
+        private int i, j, k;
+    }
+
+    private static class Pair {
+        private DFAState a, b;
+
+        private Pair(DFAState a, DFAState b) {
+            this.a = a;
+            this.b = b;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+
+            Pair pair = (Pair) o;
+
+            if (a != null ? !a.equals(pair.a) : pair.a != null) return false;
+            return b != null ? b.equals(pair.b) : pair.b == null;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = a != null ? a.hashCode() : 0;
+            result = 31 * result + (b != null ? b.hashCode() : 0);
+            return result;
+        }
+    }
+
+
+    private HashMap<Triplet, String> regExps;
+    private HashMap<DFAState, Integer> statesNums;
+
+    private String genRegExp(Triplet triplet) {
+        String ret = regExps.getOrDefault(triplet, null);
+        if (ret == null) {
+            if (triplet.k == -1) // базис
+            {
+                DFAState a = states[triplet.i], b = states[triplet.j];
+                StringBuilder strb = new StringBuilder();
+                for (Map.Entry<Character, DFATransition> tr : a.trans.entrySet()) {
+                    if (tr.getValue().next == b)
+                        strb.append(tr.getKey()).append('|');
+                }
+                if (strb.length() > 0) {
+                    strb.deleteCharAt(strb.length() - 1);
+                    ret = strb.toString();
+                    if (a == b)
+                        if (ret.length() > 1)
+                            ret = "(" + ret + ")?";
+                        else ret += '?';
+                } else if (a == b) ret = "";
+
+            } else {
+                StringBuilder strbl = new StringBuilder(), strbr = new StringBuilder();
+                String Rijkm1 = genRegExp(new Triplet(triplet.i, triplet.j, triplet.k - 1));
+                String Rikkm1 = genRegExp(new Triplet(triplet.i, triplet.k, triplet.k - 1));
+                String Rkkkm1 = genRegExp(new Triplet(triplet.k, triplet.k, triplet.k - 1));
+                String Rkjkm1 = genRegExp(new Triplet(triplet.k, triplet.j, triplet.k - 1));
+                if ((Rkjkm1 == null || Rikkm1 == null || Rkkkm1 == null)) {
+                    ret = Rijkm1;
+                    if (ret != null && ret.length() > 1 && (ret.charAt(0) != '(' || ret.charAt(ret.length() - 1) != ')'))
+                        ret = "(" + ret + ")";
+                } else if (Rikkm1.isEmpty() && Rkjkm1.isEmpty() && Rkkkm1.isEmpty()) {
+                    ret = Rijkm1;
+                    if (ret != null)
+                        ret = "(" + ret + ")?";
+                } else {
+                    boolean hasEmpty = false;
+                    if (Rijkm1 != null) {
+                        if (Rijkm1.isEmpty())
+                            hasEmpty = true;
+                        else
+                            strbl.append(Rijkm1);
+                    }
+                    strbr.append(Rikkm1);
+                    if (!Rkkkm1.isEmpty()) {
+                        LinkedList<String> tmp = new LinkedList<>(List.of(Rkkkm1.split("\\|")));
+                        StringBuilder bld2 = new StringBuilder();
+                        for (String str1 : tmp)
+                            bld2.append(str1).append('|');
+                        if (bld2.length() > 0) bld2.deleteCharAt(bld2.length() - 1);
+                        if (bld2.length() > 1)
+                            strbr.append("(").append(bld2).append(")...");
+                        else if (bld2.length() == 1)
+                            strbr.append(bld2).append("...");
+                    }
+                    strbr.append(Rkjkm1);
+
+                    if (strbl.length() == 0 && strbr.length() == 0) ret = "";
+                    else if (strbr.length() == 0) ret = strbl.toString();
+                    else if (strbl.length() == 0 || strbl.compareTo(strbr) == 0) ret = strbr.toString();
+                    else {
+                        ret = strbl.append('|').append(strbr).toString();
+                    }
+                    if (!ret.isEmpty()) {
+                        //if (ret.length() > 1 && (ret.charAt(0) != '(' || ret.charAt(ret.length() - 1) != ')'))
+                        //  if (ret.length() > 1)
+                        ret = "(" + ret + ")";
+                        if (hasEmpty)
+                            ret += "?";
+                    }
+                }
+            }
+            regExps.put(triplet, ret);
+        }
+        if (ret != null && ret.length() == 1 && SPECIAL_LETTERS.contains(ret.charAt(0)))
+            ret = '%' + ret + '%';
+        if (ret != null && (ret.equals("...") || ret.equals("(...)")))
+            ret = "%...%";
+        return ret;
+    }
+
+    /**
+     * Метод восстанавливает регулярное выражение из автомата методом к-путей
+     *
+     * @return регулярное выражение, эквивалентное данному автомату.
+     */
+    public String genRegExp() {
+        return genRegExp(true);
+    }
+
+    private String genRegExp(boolean simpl) {
+        StringBuilder ret = new StringBuilder();
+        statesNums = new HashMap<>();
+        regExps = new HashMap<>();
+        // номер состояния - просто его номер в массиве. однако необходим так же по состоянию узнать его номер.
+        for (int i = 0; i < states.length; ++i)
+            statesNums.put(states[i], i);
+
+        int startNum = statesNums.get(start), n = states.length - 1;
+        // теперь просто сгенерируем объединение всех R(i, j, n) где переменной будет только j (номера конечных состояний)
+        boolean hasEmpty = true;
+        for (DFAState st : finishStates) {
+            String Rijn = genRegExp(new Triplet(startNum, statesNums.get(st), n));
+            if (Rijn == null) continue;
+            if (Rijn.isEmpty() && hasEmpty) {
+                hasEmpty = false;
+            } else if (!Rijn.isEmpty()) {
+                ret.append(Rijn).append("|");
+            }
+        }
+        if (ret.length() > 1) {
+            ret.deleteCharAt(ret.length() - 1);
+            if (!hasEmpty) ret.insert(0, '(').append(")?");
+        }
+        statesNums.clear();
+        statesNums = null;
+        regExps.clear();
+        regExps = null;
+        if (simpl)
+            return simplify(ret.toString());
+        else
+            return ret.toString();
+    }
+
+    // метод удаляет некоторые излишества, путем перевода регулярки в дерево и последующего восстановления
+    private String simplify(String regExp) {
+        Token[] tokens = tokenization(regExp);
+        STNode root = findCase(tokens, 0, tokens.length, null);
+        String ret = root.restoreString().replace("%%", "");
+        root.clean();
+        return ret;
+    }
+
+    /**
+     * Метод выполняет реверс регулярного выражения, заданного данным автоматом
+     *
+     * @return Регулярное выражение, эквивалентное реверсу данного автомата
+     */
+    public String reversString() {
+        String reg = genRegExp(false); // упрощение будет выполнено в конце, сейчас не будем на это тратить время и память
+        Token[] tokens = tokenization(reg);
+        STNode root = findCase(tokens, 0, tokens.length, null);
+        root.revers();
+        String ret = root.restoreString().replace("%%", "");
+        root.clean();
+        return ret;
+    }
+
+    public RegExp revers() {
+        // return compile(reversString());
+        String reg = genRegExp(false); // упрощение будет выполнено в конце, сейчас не будем на это тратить время и память
+        Token[] tokens = tokenization(reg);
+        STNode root = findCase(tokens, 0, tokens.length - 1, null);
+        root.revers();
+        {
+            STNode tmp = new STNode(null, STNode.NodeType.CONCAT, null);
+            tmp.childA = root;
+            tmp.childB = new STNode(tmp, STNode.NodeType.STRING, tokens[tokens.length - 1]);
+            tmp.childB.isNullabel = false;
+            tmp.childB.first.add(tokens.length - 1);
+            tmp.childB.last.add(tokens.length - 1);
+            root.parent = tmp;
+            root = tmp;
+
+            root.isNullabel = root.childA.isNullabel && root.childB.isNullabel;
+            root.first.addAll(root.childA.first);
+            if (root.childA.isNullabel) {
+                root.first.addAll(root.childB.first);
+            }
+            root.last.addAll(root.childB.last);
+        }
+        //System.err.println(root);
+        RegExp ret = generate(tokens, root);
+        root.clean();
+        return ret;
+    }
+
+    /**
+     * Возвращает новый автомат, являющийся объединением двух данных
+     *
+     * @param b автомат для объединения
+     * @return новый автомат, принимающий строки, если их принимает хотя бы один из исходных автоматов
+     */
+    public RegExp union(RegExp b) {
+        return compile("(" + genRegExp(false) + ")|(" + b.genRegExp(false) + ")");
+    }
+
+    /// помещает в набор все состояния, достижимые из данного (включая его самого)
+    private void getAcc(HashSet<DFAState> acc, DFAState cur) {
+        if (!acc.add(cur)) return;
+        for (DFATransition tr : cur.trans.values()) {
+            getAcc(acc, tr.next);
+        }
+    }
+
+    /**
+     * Возвращает симметрическую разность данных автоматов
+     *
+     * @param bExp вычитаемый автомат
+     * @return разность автоматов
+     */
+    public RegExp sub(RegExp bExp) {
+        RegExp ret = new RegExp();
+        HashMap<Pair, DFAState> newStates = new HashMap<>();  // тут будет декартово произведение автоматов
+        for (DFAState a : states) {
+            for (DFAState b : bExp.states) {
+                newStates.put(new Pair(a, b), ret.getDFAState());
+            }
+            newStates.put(new Pair(a, null), ret.getDFAState());
+        }
+        for (DFAState b : bExp.states) {
+            newStates.put(new Pair(null, b), ret.getDFAState());
+        }
+        // теперь восстановим все переходы и принимающие состояния
+        HashSet<DFAState> finish = new HashSet<>();
+        for (Map.Entry<Pair, DFAState> st : newStates.entrySet()) {
+            if (this.finishStates.contains(st.getKey().a) && !bExp.finishStates.contains(st.getKey().b)) {
+                finish.add(st.getValue());
+            }
+            DFAState a = st.getKey().a, b = st.getKey().b;
+            if (a == null) {
+                for (Map.Entry<Character, DFATransition> tr : b.trans.entrySet()) {
+                    DFATransition tmp = ret.getDFATransition();
+                    tmp.next = newStates.get(new Pair(null, tr.getValue().next));
+                    st.getValue().trans.put(tr.getKey(), tmp);
+                }
+            } else if (b == null) {
+                for (Map.Entry<Character, DFATransition> tr : a.trans.entrySet()) {
+                    DFATransition tmp = ret.getDFATransition();
+                    tmp.next = newStates.get(new Pair(tr.getValue().next, null));
+                    st.getValue().trans.put(tr.getKey(), tmp);
+                }
+            } else {
+                HashSet<Character> transChar = new HashSet<>();
+                transChar.addAll(a.trans.keySet());
+                transChar.addAll(b.trans.keySet());
+                for (char tr : transChar) {
+                    DFATransition nxA = a.trans.getOrDefault(tr, null), nxB = b.trans.getOrDefault(tr, null);
+                    Pair nx = new Pair(nxA == null ? null : nxA.next, nxB == null ? null : nxB.next);
+                    DFATransition tmp = ret.getDFATransition();
+                    tmp.next = newStates.get(nx);
+                    st.getValue().trans.put(tr, tmp);
+                }
+            }
+        }
+        DFAState start = newStates.get(new Pair(this.start, bExp.start));
+        HashSet<DFAState> statesSet = new HashSet<>(newStates.values());
+        // теперь выполним удаление бесполезных состояний (тех, что недостижимы из стартового или являются тупиковыми)
+        HashSet<DFAState> useless = new HashSet<>(statesSet);
+        {
+            HashSet<DFAState> acc = new HashSet<>();// множество состояний, до которых можно добраться из стартового
+            getAcc(acc, start);
+            useless.removeAll(acc);
+            for (DFAState st : statesSet) {
+                if (st == start || finish.contains(st) || useless.contains(st)) continue;
+                boolean usls = true;
+                for (DFATransition tr : st.trans.values()) {
+                    if (tr.next != st) {
+                        usls = false;
+                        break;
+                    }
+                }
+                if (usls) {
+                    useless.add(st);
+                }
+            }
+        }
+        for (DFAState st : statesSet) {
+            if (useless.contains(st)) st.clear();
+            else
+                for (char tr : st.trans.keySet()) {
+                    if (useless.contains(st.trans.get(tr).next))
+                        st.trans.remove(tr);
+                }
+        }
+        statesSet.removeAll(useless);
+        finish.removeAll(useless);
+
+        // теперь осталось просто сформировать результат.
+
+        DFAState[] states = new DFAState[statesSet.size()];
+        states = statesSet.toArray(states);
+        statesSet.clear();
+        newStates.clear();
+        useless.clear();
+        ret.init(start, finish, states);
+        return ret;
     }
 }
